@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>현물 확인 스캐너</title>
+<style>
+html,body{margin:0;height:100%;background:#000;color:#fff;font-family:-apple-system,"Pretendard",sans-serif}
+#v{position:fixed;inset:0;width:100%;height:100%;object-fit:cover}
+#box{position:fixed;left:8%;right:8%;top:36%;height:22%;border:3px solid #4ade80;border-radius:12px;box-shadow:0 0 0 2000px rgba(0,0,0,.4);pointer-events:none}
+#top{position:fixed;left:0;right:0;top:0;padding:calc(env(safe-area-inset-top) + 14px) 16px 10px;text-align:center;font-size:16px;text-shadow:0 1px 3px #000}
+#bot{position:fixed;left:16px;right:16px;bottom:calc(env(safe-area-inset-bottom) + 18px);display:flex;flex-direction:column;gap:10px}
+button,a.b{padding:14px;font-size:16px;border:0;border-radius:10px;background:#fff;color:#111;text-align:center;text-decoration:none}
+input{padding:13px;font-size:16px;border-radius:10px;border:0;text-transform:uppercase}
+#msg{position:fixed;left:16px;right:16px;top:30%;text-align:center;font-size:15px;line-height:1.6}
+</style></head><body>
+<video id="v" playsinline muted autoplay></video><div id="box"></div>
+<div id="top">바코드를 초록 상자 안에 맞춰 주세요</div>
+<div id="msg"></div>
+<div id="bot">
+  <input id="manual" placeholder="자산코드 직접 입력" autocapitalize="characters">
+  <button id="go">직접 입력 확인</button>
+</div>
+<script>
+// 현물 확인 앱(구글 앱스크립트) 주소. 스캔하면 ?code=코드 로 넘어가 결과를 바로 보여 줌
+const APP = 'https://script.google.com/macros/s/AKfycbzzMvZq7G6h-EzRas2Cjc0lqvxQiCEkEQ51a0ZW0pRqC1UWpIUX7aPxm6BqFGB1DyEDOw/exec';
+const ZV = 'https://cdn.jsdelivr.net/npm/zxing-wasm@2.2.4/dist/';
+const $ = id => document.getElementById(id);
+let done = false;
+function send(code) {
+  if (done) return; done = true;
+  try { navigator.vibrate && navigator.vibrate(80); } catch (e) {}
+  $('msg').textContent = code + ' 확인 중...';
+  location.href = APP + '?code=' + encodeURIComponent(code.trim());
+}
+$('go').onclick = () => { const c = $('manual').value.trim(); if (c) send(c); };
+function loadZX() {
+  return new Promise((ok, no) => { const s = document.createElement('script'); s.src = ZV + 'iife/reader/index.js'; s.onload = ok; s.onerror = () => no(new Error('라이브러리 로드 실패')); document.head.appendChild(s); });
+}
+(async function () {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+  } catch (e) {
+    $('msg').innerHTML = '카메라를 열 수 없습니다 (' + (e && e.name) + ').<br>주소창 왼쪽 설정(aA)에서 카메라를 허용해 주세요.';
+    return;
+  }
+  const v = $('v'); v.srcObject = stream; try { await v.play(); } catch (e) {}
+  try { const tr = stream.getVideoTracks()[0], cap = tr.getCapabilities ? tr.getCapabilities() : {}; if (cap.focusMode && cap.focusMode.indexOf('continuous') !== -1) await tr.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch (e) {}
+  let det = null;
+  try { if (window.BarcodeDetector) det = new BarcodeDetector({ formats: ['code_128', 'code_39', 'ean_13', 'qr_code'] }); } catch (e) {}
+  const opts = { tryHarder: true, tryRotate: true, formats: ['Code128', 'Code39', 'EAN13', 'QRCode'] };
+  if (!det) {
+    try { await loadZX(); } catch (e) { $('msg').textContent = '인식 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.'; return; }
+    ZXingWASM.setZXingModuleOverrides({ locateFile: (p, prefix) => p.endsWith('.wasm') ? ZV + 'reader/' + p : prefix + p });
+  }
+  const cv = document.createElement('canvas'), cx = cv.getContext('2d', { willReadFrequently: true });
+  while (!done) {
+    try {
+      if (v.videoWidth) {
+        if (det) { const r = await det.detect(v); if (r.length && r[0].rawValue) return send(r[0].rawValue); }
+        else {
+          const k = Math.min(1, 1280 / v.videoWidth); cv.width = Math.round(v.videoWidth * k); cv.height = Math.round(v.videoHeight * k);
+          cx.drawImage(v, 0, 0, cv.width, cv.height);
+          const r = await ZXingWASM.readBarcodes(cx.getImageData(0, 0, cv.width, cv.height), opts);
+          if (r.length && r[0].text) return send(r[0].text);
+        }
+      }
+    } catch (e) {}
+    await new Promise(res => setTimeout(res, 150));
+  }
+})();
+</script></body></html>
